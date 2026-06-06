@@ -1,0 +1,972 @@
+
+============================================================
+Файл: package.json
+============================================================
+
+{
+  "name": "yolov8seg",
+  "homepage": "https://sh-dimitrij.github.io/dl-yolov8-seg-lamp",
+  "version": "0.1.0",
+  "dependencies": {
+    "@techstark/opencv-js": "4.5.5-release.2",
+    "onnxruntime-web": "^1.14.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1"
+  },
+  "scripts": {
+    "start": "craco start",
+    "build": "craco build",
+    "predeploy": "yarn build",
+    "deploy": "gh-pages -d build"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@craco/craco": "^7.1.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "gh-pages": "^6.3.0"
+  }
+}
+
+
+============================================================
+Файл: craco.config.js
+============================================================
+
+const CopyPlugin = require("copy-webpack-plugin");
+const path = require("path");
+
+module.exports = {
+  webpack: {
+    plugins: {
+      add: [
+        new CopyPlugin({
+          patterns: [
+            { from: "node_modules/onnxruntime-web/dist/*.wasm", to: "static/js/[name][ext]" },
+            { from: './public/model/model.onnx', to: '[name][ext]'},
+            { from: './public/model/nms-yolov8.onnx', to: '[name][ext]'},
+            { from: './public/model/mask-yolov8-seg.onnx', to: '[name][ext]'}
+          ],
+        }),
+      ],
+    },
+    configure: (config) => {
+      config.resolve.fallback = {
+        fs: false,
+        path: false,
+        crypto: false,
+      };
+      return config;
+    },
+  },
+  devServer: {
+    historyApiFallback: {
+      disableDotRule: true,
+      rewrites: [
+        { from: /\.(onnx|wasm)$/, to: (context) => context.parsedUrl.pathname },
+      ],
+    },
+    setupMiddlewares: (middlewares, devServer) => {
+      const express = require("express");
+      // Явно отдаём папку public/model как статику
+      devServer.app.use(
+        '/model',
+        express.static(path.resolve(__dirname, 'public/model'), {
+          setHeaders: (res) => {
+            res.setHeader('Content-Type', 'application/octet-stream');
+          }
+        })
+      );
+      return middlewares;
+    },
+  },
+};
+
+
+============================================================
+Файл: src/index.js
+============================================================
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+
+============================================================
+Файл: src/App.js
+============================================================
+
+import React, { useState, useRef } from "react";
+import cv from "@techstark/opencv-js";
+import { Tensor, InferenceSession } from "onnxruntime-web";
+import Loader from "./components/loader";
+import { detectImage } from "./utils/detect";
+import { CLASS_INFO, CLASS_LABELS_RU } from "./utils/renderBox";
+import "./style/App.css";
+import { env } from "onnxruntime-web";
+env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
+
+const CLASS_COLORS = {
+  table_lamp: "#583EE0",
+  luminaire:  "#C5A23F",
+  chandelier: "#34D1B7",
+};
+
+const App = () => {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState({ text: "Loading OpenCV.js", progress: null });
+  const [image, setImage] = useState(null);
+  const [detectedKeys, setDetectedKeys] = useState(null);
+  const inputImage = useRef(null);
+  const imageRef = useRef(null);
+  const canvasRef = useRef(null);
+  // configs
+  const modelName = "model.onnx";
+  const modelInputShape = [1, 3, 640, 640];
+  const topk = 100;
+  const iouThreshold = 0.45;
+  const scoreThreshold = 0.21;
+
+  // wait until opencv.js initialized
+  cv["onRuntimeInitialized"] = async () => {
+    // create session
+    setLoading({ text: "Loading model...", progress: null });
+    const yolov8 = await InferenceSession.create('/model/model.onnx');
+
+    setLoading({ text: "Warming up nms...", progress: null });
+    const nms = await InferenceSession.create('/model/nms-yolov8.onnx');
+
+    setLoading({ text: "Warming up mask...", progress: null });
+    const mask = await InferenceSession.create('/model/mask-yolov8-seg.onnx');
+
+    // warmup main model
+    setLoading({ text: "Warming up model...", progress: null });
+    const tensor = new Tensor(
+      "float32",
+      new Float32Array(modelInputShape.reduce((a, b) => a * b)),
+      modelInputShape
+    );
+    await yolov8.run({ images: tensor });
+
+    setSession({ net: yolov8, nms: nms, mask: mask });
+    setLoading(null);
+  };
+
+  return (
+    <div className="App">
+      {loading && (
+        <Loader>
+          {loading.progress ? `${loading.text} - ${loading.progress}%` : loading.text}
+        </Loader>
+      )}
+
+      <div className="header">
+        <h1>SuperLampScanner</h1>
+        <p className="header-sub">Сегментация светильников · YOLOv8</p>
+        <p>
+          Модель: <code className="code">{modelName}</code>
+        </p>
+      </div>
+
+      <div className="content">
+        <img
+          ref={imageRef}
+          src="#"
+          alt=""
+          style={{ display: image ? "block" : "none" }}
+          onLoad={() => {
+            // сбрасываем карточки перед новой детекцией
+            setDetectedKeys(null);
+            // вызов детекции — точно как в оригинале, не async
+            detectImage(
+              imageRef.current,
+              canvasRef.current,
+              session,
+              topk,
+              iouThreshold,
+              scoreThreshold,
+              modelInputShape
+            ).then((boxes) => {
+              const seen = new Set();
+              const uniqueKeys = [];
+              for (const box of boxes) {
+                if (!seen.has(box.label)) {
+                  seen.add(box.label);
+                  uniqueKeys.push(box.label);
+                }
+              }
+              setDetectedKeys(uniqueKeys);
+            });
+          }}
+        />
+        <canvas
+          id="canvas"
+          width={modelInputShape[2]}
+          height={modelInputShape[3]}
+          ref={canvasRef}
+        />
+      </div>
+
+      <input
+        type="file"
+        ref={inputImage}
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          // оригинал: если было изображение — освобождаем URL и сбрасываем
+          if (image) {
+            URL.revokeObjectURL(image);
+            setImage(null);
+          }
+
+          const url = URL.createObjectURL(e.target.files[0]); // create image url
+          imageRef.current.src = url; // set image source
+          setImage(url);
+          // не трогаем detectedKeys здесь — сбрасываем только в onLoad
+        }}
+      />
+
+      <div className="btn-container">
+        <button
+          onClick={() => {
+            inputImage.current.click();
+          }}
+        >
+          Open local image
+        </button>
+        {image && (
+          <button
+            onClick={() => {
+              inputImage.current.value = "";
+              imageRef.current.src = "#";
+              URL.revokeObjectURL(image);
+              setImage(null);
+              setDetectedKeys(null);
+            }}
+          >
+            Close image
+          </button>
+        )}
+      </div>
+
+      {/* Карточки — только после детекции, только найденные классы */}
+      {detectedKeys !== null && detectedKeys.length > 0 && (
+        <div className="info-section">
+          <div className="section-label">Обнаружено на изображении</div>
+          <div className="class-legend">
+            {detectedKeys.map((key) => {
+              const info  = CLASS_INFO[key];
+              const color = CLASS_COLORS[key] || "#888";
+              return (
+                <div className="class-card" key={key}>
+                  <div className="class-card-header" style={{ borderBottom: `2px solid ${color}40` }}>
+                    <span className="class-dot" style={{ background: color }} />
+                    <h3>{CLASS_LABELS_RU[key]}</h3>
+                  </div>
+                  <div className="class-card-body">
+                    <p className="class-card-desc">{info.description}</p>
+                    <div className="class-params">
+                      {info.params.map((p) => (
+                        <div className="class-param-row" key={p.name}>
+                          <span className="param-name" style={{ color }}>{p.name}</span>
+                          <span className="param-value">{p.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default App;
+
+
+============================================================
+Файл: src/utils/detect.js
+============================================================
+
+import cv from "@techstark/opencv-js";
+import { Tensor } from "onnxruntime-web";
+import { renderBoxes, Colors } from "./renderBox";
+import labels from "./labels.json";
+
+const colors = new Colors();
+const numClass = labels.length;
+
+/**
+ * Detect Image
+ * @param {HTMLImageElement} image Image to detect
+ * @param {HTMLCanvasElement} canvas canvas to draw boxes
+ * @param {ort.InferenceSession} session YOLOv8 onnxruntime session
+ * @param {Number} topk Integer representing the maximum number of boxes to be selected per class
+ * @param {Number} iouThreshold Float representing the threshold for deciding whether boxes overlap too much with respect to IOU
+ * @param {Number} scoreThreshold Float representing the threshold for deciding when to remove boxes based on score
+ * @param {Number[]} inputShape model input shape. Normally in YOLO model [batch, channels, width, height]
+ */
+export const detectImage = async (
+  image,
+  canvas,
+  session,
+  topk,
+  iouThreshold,
+  scoreThreshold,
+  inputShape
+) => {
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height); // clean canvas
+
+  const [modelWidth, modelHeight] = inputShape.slice(2);
+  const maxSize = Math.max(modelWidth, modelHeight); // max size in input model
+  const [input, xRatio, yRatio] = preprocessing(image, modelWidth, modelHeight); // preprocess frame
+
+  const tensor = new Tensor("float32", input.data32F, inputShape); // to ort.Tensor
+  const config = new Tensor(
+    "float32",
+    new Float32Array([
+      numClass, // num class
+      topk, // topk per class
+      iouThreshold, // iou threshold
+      scoreThreshold, // score threshold
+    ])
+  ); // nms config tensor
+  const { output0, output1 } = await session.net.run({ images: tensor }); // run session and get output layer. out1: detect layer, out2: seg layer
+  const { selected } = await session.nms.run({ detection: output0, config: config }); // perform nms and filter boxes
+
+  const boxes = []; // ready to draw boxes
+  let overlay = new Tensor("uint8", new Uint8Array(modelHeight * modelWidth * 4), [
+    modelHeight,
+    modelWidth,
+    4,
+  ]); // create overlay to draw segmentation object
+
+  // looping through output
+  for (let idx = 0; idx < selected.dims[1]; idx++) {
+    const data = selected.data.slice(idx * selected.dims[2], (idx + 1) * selected.dims[2]); // get rows
+    let box = data.slice(0, 4); // det boxes
+    const scores = data.slice(4, 4 + numClass); // det classes probability scores
+    const score = Math.max(...scores); // maximum probability scores
+    const label = scores.indexOf(score); // class id of maximum probability scores
+    const color = colors.get(label); // get color
+
+    box = overflowBoxes(
+      [
+        box[0] - 0.5 * box[2], // before upscale x
+        box[1] - 0.5 * box[3], // before upscale y
+        box[2], // before upscale w
+        box[3], // before upscale h
+      ],
+      maxSize
+    ); // keep boxes in maxSize range
+
+    const [x, y, w, h] = overflowBoxes(
+      [
+        Math.floor(box[0] * xRatio), // upscale left
+        Math.floor(box[1] * yRatio), // upscale top
+        Math.floor(box[2] * xRatio), // upscale width
+        Math.floor(box[3] * yRatio), // upscale height
+      ],
+      maxSize
+    ); // upscale boxes
+
+    boxes.push({
+      label: labels[label],
+      probability: score,
+      color: color,
+      bounding: [x, y, w, h], // upscale box
+    }); // update boxes to draw later
+
+    const mask = new Tensor(
+      "float32",
+      new Float32Array([
+        ...box, // original scale box
+        ...data.slice(4 + numClass), // mask data
+      ])
+    ); // mask input
+    const maskConfig = new Tensor(
+      "float32",
+      new Float32Array([
+        maxSize,
+        x, // upscale x
+        y, // upscale y
+        w, // upscale width
+        h, // upscale height
+        ...Colors.hexToRgba(color, 120), // color in RGBA
+      ])
+    ); // mask config
+    const { mask_filter } = await session.mask.run({
+      detection: mask,
+      mask: output1,
+      config: maskConfig,
+      overlay: overlay,
+    }); // perform post-process to get mask
+
+    overlay = mask_filter; // update overlay with the new one
+  }
+
+  const mask_img = new ImageData(new Uint8ClampedArray(overlay.data), modelHeight, modelWidth); // create image data from mask overlay
+  ctx.putImageData(mask_img, 0, 0); // put overlay to canvas
+
+  renderBoxes(ctx, boxes); // draw boxes after overlay added to canvas
+
+  input.delete(); // delete unused Mat
+
+  return boxes; // единственное добавление к оригиналу
+};
+
+/**
+ * Preprocessing image
+ * @param {HTMLImageElement} source image source
+ * @param {Number} modelWidth model input width
+ * @param {Number} modelHeight model input height
+ * @param {Number} stride model stride
+ * @return preprocessed image and configs
+ */
+const preprocessing = (source, modelWidth, modelHeight, stride = 32) => {
+  const mat = cv.imread(source); // read from img tag
+  const matC3 = new cv.Mat(mat.rows, mat.cols, cv.CV_8UC3); // new image matrix
+  cv.cvtColor(mat, matC3, cv.COLOR_RGBA2BGR); // RGBA to BGR
+
+  const [w, h] = divStride(stride, matC3.cols, matC3.rows);
+  cv.resize(matC3, matC3, new cv.Size(w, h));
+
+  // padding image to [n x n] dim
+  const maxSize = Math.max(matC3.rows, matC3.cols); // get max size from width and height
+  const xPad = maxSize - matC3.cols, // set xPadding
+    xRatio = maxSize / matC3.cols; // set xRatio
+  const yPad = maxSize - matC3.rows, // set yPadding
+    yRatio = maxSize / matC3.rows; // set yRatio
+  const matPad = new cv.Mat(); // new mat for padded image
+  cv.copyMakeBorder(matC3, matPad, 0, yPad, 0, xPad, cv.BORDER_CONSTANT); // padding black
+
+  const input = cv.blobFromImage(
+    matPad,
+    1 / 255.0, // normalize
+    new cv.Size(modelWidth, modelHeight), // resize to model input size
+    new cv.Scalar(0, 0, 0),
+    true, // swapRB
+    false // crop
+  ); // preprocessing image matrix
+
+  // release mat opencv
+  mat.delete();
+  matC3.delete();
+  matPad.delete();
+
+  return [input, xRatio, yRatio];
+};
+
+/**
+ * Get divisible image size by stride
+ * @param {Number} stride
+ * @param {Number} width
+ * @param {Number} height
+ * @returns {Number[2]} image size [w, h]
+ */
+const divStride = (stride, width, height) => {
+  if (width % stride !== 0) {
+    if (width % stride >= stride / 2) width = (Math.floor(width / stride) + 1) * stride;
+    else width = Math.floor(width / stride) * stride;
+  }
+  if (height % stride !== 0) {
+    if (height % stride >= stride / 2) height = (Math.floor(height / stride) + 1) * stride;
+    else height = Math.floor(height / stride) * stride;
+  }
+  return [width, height];
+};
+
+/**
+ * Handle overflow boxes based on maxSize
+ * @param {Number[4]} box box in [x, y, w, h] format
+ * @param {Number} maxSize
+ * @returns non overflow boxes
+ */
+const overflowBoxes = (box, maxSize) => {
+  box[0] = box[0] >= 0 ? box[0] : 0;
+  box[1] = box[1] >= 0 ? box[1] : 0;
+  box[2] = box[0] + box[2] <= maxSize ? box[2] : maxSize - box[0];
+  box[3] = box[1] + box[3] <= maxSize ? box[3] : maxSize - box[1];
+  return box;
+};
+
+
+============================================================
+Файл: src/utils/labels.json
+============================================================
+
+[
+  "table_lamp",
+  "luminaire",
+  "chandelier"
+]
+
+
+============================================================
+Файл: src/utils/renderBox.js
+============================================================
+
+/**
+ * Render prediction boxes
+ * @param {HTMLCanvasElement} canvas canvas tag reference
+ * @param {Array[Object]} boxes boxes array
+ */
+
+// Russian display names (used only for info cards in App.js, NOT for canvas labels)
+export const CLASS_LABELS_RU = {
+  "table_lamp": "Настольная лампа",
+  "luminaire":  "Светильник",
+  "chandelier": "Люстра",
+};
+
+// Info shown in cards after detection
+export const CLASS_INFO = {
+  "table_lamp": {
+    description: "Компактный источник направленного света для рабочей поверхности или прикроватной тумбы.",
+    params: [
+      { name: "Тип",        value: "Настольный" },
+      { name: "Назначение", value: "Локальное освещение" },
+      { name: "Установка",  value: "На поверхность" },
+    ],
+  },
+  "luminaire": {
+    description: "Потолочный или настенный светильник для общего или акцентного освещения помещения.",
+    params: [
+      { name: "Тип",        value: "Потолочный / настенный" },
+      { name: "Назначение", value: "Общее освещение" },
+      { name: "Установка",  value: "Монтаж к потолку или стене" },
+    ],
+  },
+  "chandelier": {
+    description: "Декоративный многоламповый светильник, подвешиваемый к потолку, — акцент интерьера.",
+    params: [
+      { name: "Тип",        value: "Подвесной" },
+      { name: "Назначение", value: "Декор + освещение" },
+      { name: "Установка",  value: "Крепление к потолку" },
+    ],
+  },
+};
+
+// ── renderBoxes: ОРИГИНАЛ из merge.txt, не изменён ──────────────────────────
+export const renderBoxes = (ctx, boxes) => {
+  // font configs
+  const font = `${Math.max(
+    Math.round(Math.max(ctx.canvas.width, ctx.canvas.height) / 40),
+    14
+  )}px Arial`;
+  ctx.font = font;
+  ctx.textBaseline = "top";
+
+  boxes.forEach((box) => {
+    const klass = box.label;
+    const color = box.color;
+    const score = (box.probability * 100).toFixed(1);
+    const [x1, y1, width, height] = box.bounding;
+
+    // draw border box
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(Math.min(ctx.canvas.width, ctx.canvas.height) / 200, 2.5);
+    ctx.strokeRect(x1, y1, width, height);
+
+    // draw the label background.
+    ctx.fillStyle = color;
+    const textWidth = ctx.measureText(klass + " - " + score + "%").width;
+    const textHeight = parseInt(font, 10); // base 10
+    const yText = y1 - (textHeight + ctx.lineWidth);
+    ctx.fillRect(
+      x1 - 1,
+      yText < 0 ? 0 : yText,
+      textWidth + ctx.lineWidth,
+      textHeight + ctx.lineWidth
+    );
+
+    // Draw labels
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(klass + " - " + score + "%", x1 - 1, yText < 0 ? 1 : yText + 1);
+  });
+};
+
+// ── Colors: оригинальная структура, только 3 первых цвета заменены ───────────
+export class Colors {
+  constructor() {
+    this.palette = [
+      "#583EE0", // index 0 → table_lamp
+      "#C5A23F", // index 1 → luminaire
+      "#34D1B7", // index 2 → chandelier
+      "#FFB21D",
+      "#CFD231",
+      "#48F90A",
+      "#92CC17",
+      "#3DDB86",
+      "#1A9334",
+      "#00D4BB",
+      "#2C99A8",
+      "#00C2FF",
+      "#344593",
+      "#6473FF",
+      "#0018EC",
+      "#8438FF",
+      "#520085",
+      "#CB38FF",
+      "#FF95C8",
+      "#FF37C7",
+    ];
+    this.n = this.palette.length;
+  }
+
+  get = (i) => this.palette[Math.floor(i) % this.n];
+
+  static hexToRgba = (hex, alpha) => {
+    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result
+      ? [parseInt(result[1], 16), parseInt(result[2], 16), parseInt(result[3], 16), alpha]
+      : null;
+  };
+}
+
+
+============================================================
+Файл: src/components/loader.js
+============================================================
+
+import React from "react";
+import "../style/App.css";
+
+const Loader = (props) => {
+  return (
+    <div className="wrapper">
+      <div className="spinner"></div>
+      <p>{props.children}</p>
+    </div>
+  );
+};
+
+export default Loader;
+
+
+============================================================
+Файл: src/style/App.css
+============================================================
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Lato:wght@300;400;600&display=swap');
+
+:root {
+  --gold:       #C5A059;
+  --gold-light: #FFBF00;
+  --cream:      #FCF5E5;
+  --cream-dark: #f0e6d0;
+  --dark:       #2B2B2B;
+  --dark-mid:   #3a3a3a;
+  --text-muted: #7a7060;
+  --shadow:     0 8px 32px rgba(43,43,43,0.11);
+  --radius:     14px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Lato', sans-serif;
+  background: var(--cream);
+  color: var(--dark);
+}
+
+/* ── APP SHELL ─────────────────────────────── */
+/* оригинал: height:100vh, flex column, justify center, align center */
+.App {
+  height: 100vh;
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  overflow-y: auto;
+  gap: 0;
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(197,160,89,0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 85% 100%, rgba(52,209,183,0.08) 0%, transparent 50%),
+    var(--cream);
+}
+
+.App > * { margin: 6px 0; }
+
+/* ── HEADER ────────────────────────────────── */
+.header { text-align: center; }
+
+.header h1 {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--dark);
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.header-sub {
+  font-size: 0.78rem;
+  color: var(--gold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.header p { margin: 3px 0; font-size: 0.88rem; color: var(--text-muted); }
+
+.code {
+  padding: 2px 10px;
+  color: var(--gold-light);
+  background: var(--dark);
+  border-radius: 20px;
+  font-size: 0.76rem;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 0.04em;
+}
+
+/* ── CONTENT — ОРИГИНАЛЬНЫЙ LAYOUT, НЕ ТРОГАТЬ ─
+   img задаёт размер блока естественным образом.
+   canvas — absolute поверх, 100% w/h блока.
+   Именно так сегменты точно совпадают с изображением.
+──────────────────────────────────────────────── */
+.content {
+  position: relative;
+}
+
+.content > img {
+  width: 100%;
+  max-width: 720px;
+  max-height: 500px;
+  border-radius: 10px;
+  display: block;
+  box-shadow: 0 6px 28px rgba(0,0,0,0.15);
+  border: 2px solid rgba(197,160,89,0.28);
+}
+
+.content > canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── BUTTONS ───────────────────────────────── */
+.btn-container {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+button {
+  font-family: 'Lato', sans-serif;
+  font-size: 0.84rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 10px 26px;
+  border-radius: 40px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  color: var(--cream);
+  background: var(--dark);
+  border: 2px solid var(--dark);
+}
+
+button:hover {
+  background: var(--gold);
+  color: var(--dark);
+  border-color: var(--gold);
+  box-shadow: 0 4px 16px rgba(197,160,89,0.35);
+  transform: translateY(-1px);
+}
+
+/* ── INFO SECTION ──────────────────────────── */
+.info-section {
+  width: 100%;
+  max-width: 720px;
+}
+
+.section-label {
+  font-family: 'Playfair Display', serif;
+  font-size: 0.95rem;
+  color: var(--dark);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gold), transparent);
+}
+
+/* ── CLASS CARDS ───────────────────────────── */
+.class-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 12px;
+}
+
+.class-card {
+  background: white;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  border: 1px solid rgba(197,160,89,0.1);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  animation: fadeUp 0.28s ease both;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.class-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(43,43,43,0.13);
+}
+
+.class-card-header {
+  padding: 11px 15px 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.class-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.class-card-header h3 {
+  font-family: 'Playfair Display', serif;
+  font-size: 0.93rem;
+  font-weight: 600;
+  color: var(--dark);
+}
+
+.class-card-body { padding: 0 15px 13px; }
+
+.class-card-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.52;
+  margin-bottom: 9px;
+}
+
+.class-params { display: flex; flex-direction: column; }
+
+.class-param-row {
+  display: flex;
+  font-size: 0.76rem;
+  border-bottom: 1px dashed rgba(197,160,89,0.18);
+  padding: 3px 0;
+}
+.class-param-row:last-child { border-bottom: none; }
+
+.param-name { flex: 0 0 42%; font-weight: 600; }
+.param-value { color: var(--dark-mid); }
+
+/* ── LOADER ────────────────────────────────── */
+.wrapper {
+  background: rgba(252,245,229,0.92);
+  backdrop-filter: blur(6px);
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+}
+
+.wrapper > .spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(197,160,89,0.2);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.wrapper > p {
+  font-family: 'Lato', sans-serif;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+
+============================================================
+Файл: src/style/loader.css
+============================================================
+
+/* loader.css — стилизован под палитру приложения */
+/* Основные стили перенесены в App.css (.wrapper, .wrapper .spinner, .wrapper p) */
+/* Этот файл оставлен для совместимости; можно удалить, если импорт убран из loader.js */
+
+
+============================================================
+Файл: public/index.html
+============================================================
+
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#2B2B2B" />
+    <meta name="description" content="SuperLampScanner — YOLOv8 сегментация светильников в браузере" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Lato:wght@300;400;600&display=swap" rel="stylesheet">
+    <title>SuperLampScanner</title>
+    <style>
+      body { margin: 0; background: #FCF5E5; }
+    </style>
+  </head>
+  <body>
+    <noscript>Для работы приложения необходим JavaScript.</noscript>
+    <div id="root"></div>
+  </body>
+</html>
+

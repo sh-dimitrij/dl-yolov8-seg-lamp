@@ -1,0 +1,1241 @@
+
+============================================================
+Файл: src/App.js
+============================================================
+
+import React, { useState, useRef } from "react";
+import cv from "@techstark/opencv-js";
+import { Tensor, InferenceSession } from "onnxruntime-web";
+import Loader from "./components/loader";
+import { detectImage } from "./utils/detect";
+import { CLASS_INFO, CLASS_LABELS_RU } from "./utils/renderBox";
+import { LABEL_TO_CATEGORY } from "./utils/searchItems";
+import { cropSegmentsByLabel } from "./utils/cropSegment";
+import { useClipSearch } from "./hooks/useClipSearch";
+import ClipResultsSection from "./components/ClipResultsSection";
+import "./style/App.css";
+import { env } from "onnxruntime-web";
+env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/";
+
+const CLASS_COLORS = {
+  table_lamp: "#583EE0",
+  luminaire:  "#C5A23F",
+  chandelier: "#34D1B7",
+};
+
+const App = () => {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState({ text: "Loading OpenCV.js", progress: null });
+  const [image, setImage] = useState(null);
+  const [detectedKeys, setDetectedKeys] = useState(null);
+  const inputImage = useRef(null);
+  const imageRef = useRef(null);
+  const canvasRef = useRef(null);
+
+  const modelName = "model.onnx";
+  const modelInputShape = [1, 3, 640, 640];
+  const topk = 100;
+  const iouThreshold = 0.45;
+  const scoreThreshold = 0.21;
+
+  const {
+    clipReady,
+    clipLoading,
+    clipProgress,
+    clipError,
+    clipItems,
+    searchSegments,
+    resetClipResults,
+  } = useClipSearch();
+
+  cv["onRuntimeInitialized"] = async () => {
+    setLoading({ text: "Loading model...", progress: null });
+    const yolov8 = await InferenceSession.create('/model/model.onnx');
+    setLoading({ text: "Warming up nms...", progress: null });
+    const nms = await InferenceSession.create('/model/nms-yolov8.onnx');
+    setLoading({ text: "Warming up mask...", progress: null });
+    const mask = await InferenceSession.create('/model/mask-yolov8-seg.onnx');
+    setLoading({ text: "Warming up model...", progress: null });
+    const tensor = new Tensor(
+      "float32",
+      new Float32Array(modelInputShape.reduce((a, b) => a * b)),
+      modelInputShape
+    );
+    await yolov8.run({ images: tensor });
+    setSession({ net: yolov8, nms: nms, mask: mask });
+    setLoading(null);
+  };
+
+  return (
+    <div className="App">
+      {loading && (
+        <Loader>
+          {loading.progress ? `${loading.text} - ${loading.progress}%` : loading.text}
+        </Loader>
+      )}
+
+      <div className="header">
+        <h1>SuperLampScanner</h1>
+        <p className="header-sub">Сегментация светильников · YOLOv8</p>
+        <p>Модель: <code className="code">{modelName}</code></p>
+      </div>
+
+      <div className="content">
+        <img
+          ref={imageRef}
+          src="#"
+          alt=""
+          style={{ display: image ? "block" : "none" }}
+          onLoad={() => {
+            setDetectedKeys(null);
+            resetClipResults();
+            detectImage(
+              imageRef.current,
+              canvasRef.current,
+              session,
+              topk,
+              iouThreshold,
+              scoreThreshold,
+              modelInputShape
+            ).then((boxes) => {
+              const seen = new Set();
+              const uniqueKeys = [];
+              for (const box of boxes) {
+                if (!seen.has(box.label)) {
+                  seen.add(box.label);
+                  uniqueKeys.push(box.label);
+                }
+              }
+              setDetectedKeys(uniqueKeys);
+
+              if (boxes.length > 0 && clipReady) {
+                const croppedMap = cropSegmentsByLabel(imageRef.current, boxes, modelInputShape);
+                const segments = Object.entries(croppedMap).map(([yoloLabel, dataUrl]) => ({
+                  categoryKey: LABEL_TO_CATEGORY[yoloLabel] || yoloLabel,
+                  dataUrl,
+                }));
+                if (segments.length > 0) searchSegments(segments);
+              }
+            });
+          }}
+        />
+        <canvas
+          id="canvas"
+          width={modelInputShape[2]}
+          height={modelInputShape[3]}
+          ref={canvasRef}
+        />
+      </div>
+
+      <input
+        type="file"
+        ref={inputImage}
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          if (image) {
+            URL.revokeObjectURL(image);
+            setImage(null);
+          }
+          const url = URL.createObjectURL(e.target.files[0]);
+          imageRef.current.src = url;
+          setImage(url);
+        }}
+      />
+
+      <div className="btn-container">
+        <button onClick={() => { inputImage.current.click(); }}>
+          Open local image
+        </button>
+        {image && (
+          <button
+            onClick={() => {
+              inputImage.current.value = "";
+              imageRef.current.src = "#";
+              URL.revokeObjectURL(image);
+              setImage(null);
+              setDetectedKeys(null);
+              resetClipResults();
+            }}
+          >
+            Close image
+          </button>
+        )}
+      </div>
+
+      {/* Карточки классов — только после детекции */}
+      {detectedKeys !== null && detectedKeys.length > 0 && (
+        <div className="info-section">
+          <div className="section-label">Обнаружено на изображении</div>
+          <div className="class-legend">
+            {detectedKeys.map((key) => {
+              const info  = CLASS_INFO[key];
+              const color = CLASS_COLORS[key] || "#888";
+              return (
+                <div className="class-card" key={key}>
+                  <div className="class-card-header" style={{ borderBottom: `2px solid ${color}40` }}>
+                    <span className="class-dot" style={{ background: color }} />
+                    <h3>{CLASS_LABELS_RU[key]}</h3>
+                  </div>
+                  <div className="class-card-body">
+                    <p className="class-card-desc">{info.description}</p>
+                    <div className="class-params">
+                      {info.params.map((p) => (
+                        <div className="class-param-row" key={p.name}>
+                          <span className="param-name" style={{ color }}>{p.name}</span>
+                          <span className="param-value">{p.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* CLIP — карточки видны всегда, сортируются после детекции */}
+      <ClipResultsSection
+        clipReady={clipReady}
+        clipLoading={clipLoading}
+        clipProgress={clipProgress}
+        clipError={clipError}
+        clipItems={clipItems}
+      />
+
+    </div>
+  );
+};
+
+export default App;
+
+
+============================================================
+Файл: src/style/App.css
+============================================================
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Lato:wght@300;400;600&display=swap');
+
+:root {
+  --gold:       #C5A059;
+  --gold-light: #FFBF00;
+  --cream:      #FCF5E5;
+  --cream-dark: #f0e6d0;
+  --dark:       #2B2B2B;
+  --dark-mid:   #3a3a3a;
+  --text-muted: #7a7060;
+  --shadow:     0 8px 32px rgba(43,43,43,0.11);
+  --radius:     14px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Lato', sans-serif;
+  background: var(--cream);
+  color: var(--dark);
+}
+
+/* ── APP SHELL ─────────────────────────────── */
+/* оригинал: height:100vh, flex column, justify center, align center */
+.App {
+  min-height: 100vh;
+  justify-content: flex-start;
+  padding-top: 30px;
+  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  gap: 0;
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(197,160,89,0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 85% 100%, rgba(52,209,183,0.08) 0%, transparent 50%),
+    var(--cream);
+}
+
+.App > * { margin: 6px 0; }
+
+/* ── HEADER ────────────────────────────────── */
+.header { text-align: center; }
+
+.header h1 {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--dark);
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.header-sub {
+  font-size: 0.78rem;
+  color: var(--gold);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.header p { margin: 3px 0; font-size: 0.88rem; color: var(--text-muted); }
+
+.code {
+  padding: 2px 10px;
+  color: var(--gold-light);
+  background: var(--dark);
+  border-radius: 20px;
+  font-size: 0.76rem;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 0.04em;
+}
+
+/* ── CONTENT — ОРИГИНАЛЬНЫЙ LAYOUT, НЕ ТРОГАТЬ ─
+   img задаёт размер блока естественным образом.
+   canvas — absolute поверх, 100% w/h блока.
+   Именно так сегменты точно совпадают с изображением.
+──────────────────────────────────────────────── */
+.content {
+  position: relative;
+}
+
+.content > img {
+  width: 100%;
+  max-width: 720px;
+  max-height: 500px;
+  border-radius: 10px;
+  display: block;
+  box-shadow: 0 6px 28px rgba(0,0,0,0.15);
+  border: 2px solid rgba(197,160,89,0.28);
+}
+
+.content > canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── BUTTONS ───────────────────────────────── */
+.btn-container {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+button {
+  font-family: 'Lato', sans-serif;
+  font-size: 0.84rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 10px 26px;
+  border-radius: 40px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+  color: var(--cream);
+  background: var(--dark);
+  border: 2px solid var(--dark);
+}
+
+button:hover {
+  background: var(--gold);
+  color: var(--dark);
+  border-color: var(--gold);
+  box-shadow: 0 4px 16px rgba(197,160,89,0.35);
+  transform: translateY(-1px);
+}
+
+/* ── INFO SECTION ──────────────────────────── */
+.info-section {
+  width: 100%;
+  max-width: 720px;
+}
+
+.section-label {
+  font-family: 'Playfair Display', serif;
+  font-size: 0.95rem;
+  color: var(--dark);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--gold), transparent);
+}
+
+/* ── CLASS CARDS ───────────────────────────── */
+.class-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 12px;
+}
+
+.class-card {
+  background: white;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  border: 1px solid rgba(197,160,89,0.1);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  animation: fadeUp 0.28s ease both;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.class-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(43,43,43,0.13);
+}
+
+.class-card-header {
+  padding: 11px 15px 9px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.class-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.class-card-header h3 {
+  font-family: 'Playfair Display', serif;
+  font-size: 0.93rem;
+  font-weight: 600;
+  color: var(--dark);
+}
+
+.class-card-body { padding: 0 15px 13px; }
+
+.class-card-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.52;
+  margin-bottom: 9px;
+}
+
+.class-params { display: flex; flex-direction: column; }
+
+.class-param-row {
+  display: flex;
+  font-size: 0.76rem;
+  border-bottom: 1px dashed rgba(197,160,89,0.18);
+  padding: 3px 0;
+}
+.class-param-row:last-child { border-bottom: none; }
+
+.param-name { flex: 0 0 42%; font-weight: 600; }
+.param-value { color: var(--dark-mid); }
+
+/* ── LOADER ────────────────────────────────── */
+.wrapper {
+  background: rgba(252,245,229,0.92);
+  backdrop-filter: blur(6px);
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+}
+
+.wrapper > .spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(197,160,89,0.2);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.wrapper > p {
+  font-family: 'Lato', sans-serif;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+
+============================================================
+Файл: src/utils/searchItems.js
+============================================================
+
+export const SEARCH_ITEMS = [
+  // === LAMP (настольные лампы) ===
+  { id: 'lamp_1', name: 'Настольная лампа с подставкой для телефона', description: 'a desk lamp with a built-in phone stand', imagePath: '/search_images/lamp/1.jpg', category: 'lamp' },
+  { id: 'lamp_2', name: 'Настольная лампа с синим абажуром', description: 'a blue-shaded desk lamp by designer philippe starck', imagePath: '/search_images/lamp/2.jpg', category: 'lamp' },
+  { id: 'lamp_3', name: 'Настольная лампа с ножкой из хрусталя', description: 'a desk lamp with a crystal base and a unique lampshade material', imagePath: '/search_images/lamp/3.jpg', category: 'lamp' },
+  { id: 'lamp_4', name: 'Настольная лампа с ножкой в виде лошади', description: 'a desk lamp with a horse-shaped leg', imagePath: '/search_images/lamp/4.jpg', category: 'lamp' },
+  { id: 'lamp_5', name: 'Настольная лампа светится на 3 растения', description: 'a desk lamp glowing on three plants', imagePath: '/search_images/lamp/5.jpg', category: 'lamp' },
+  { id: 'lamp_6', name: 'Две лампы с книгами между ними', description: 'two lamps with books placed between them', imagePath: '/search_images/lamp/6.jpg', category: 'lamp' },
+  { id: 'lamp_7', name: 'Настольная лампа светит на чашку с чаем', description: 'a desk lamp shining on a tea cup', imagePath: '/search_images/lamp/7.jpg', category: 'lamp' },
+  { id: 'lamp_8', name: 'Настольная лампа с абажуром дизайна пшеницы', description: 'a desk lamp with a wheat-design lampshade', imagePath: '/search_images/lamp/8.jpg', category: 'lamp' },
+  { id: 'lamp_9', name: 'Настольная лампа с ножкой из шестиренок', description: 'a desk lamp with a leg made of gears', imagePath: '/search_images/lamp/9.jpg', category: 'lamp' },
+  { id: 'lamp_10', name: 'Старинная лампа с зеленой крышкой и золотой основой', description: 'an antique lamp with a green shade and gold base', imagePath: '/search_images/lamp/10.jpg', category: 'lamp' },
+  { id: 'lamp_11', name: 'Итальянская настольная лампа в дорогой комнате', description: 'an italian table lamp in a luxurious room', imagePath: '/search_images/lamp/11.jpg', category: 'lamp' },
+  { id: 'lamp_12', name: 'Настольная лампа с цилиндром', description: 'a simple desk lamp standing alone on a clean white background', imagePath: '/search_images/lamp/12.jpg', category: 'lamp' },
+  { id: 'lamp_13', name: 'Лампа PIXAR', description: 'an ordinary table lamp isolated on a plain white surface', imagePath: '/search_images/lamp/13.jpg', category: 'lamp' },
+
+  // === LUMINAIRE (светильники) ===
+  { id: 'lum_1', name: 'Светильник в виде открытой книги', description: 'a lamp shaped like an open book', imagePath: '/search_images/luminaire/1.jpg', category: 'luminaire' },
+  { id: 'lum_2', name: 'Солнечный светильник для кирпичных столбов забора', description: 'solar lamp for brick fence posts and terrace railings', imagePath: '/search_images/luminaire/2.jpg', category: 'luminaire' },
+  { id: 'lum_3', name: 'Настенный светильник PEAK с видом гор', description: 'a peak wall lamp with a mountain view design', imagePath: '/search_images/luminaire/3.jpg', category: 'luminaire' },
+  { id: 'lum_4', name: 'Настенный светильник труба Stick', description: 'a stick pipe-shaped wall lamp', imagePath: '/search_images/luminaire/4.jpg', category: 'luminaire' },
+  { id: 'lum_5', name: 'Светильник садово-парковый встраиваемый LED', description: 'a recessed led landscape and garden light', imagePath: '/search_images/luminaire/5.jpg', category: 'luminaire' },
+  { id: 'lum_6', name: 'Фасадный светильник Frame Light', description: 'a frame light facade-mounted architectural luminaire', imagePath: '/search_images/luminaire/6.jpg', category: 'luminaire' },
+  { id: 'lum_7', name: 'Уличный светильник черный 35133/D', description: 'black outdoor light fixture model 35133/d', imagePath: '/search_images/luminaire/7.jpg', category: 'luminaire' },
+  { id: 'lum_8', name: 'Настенный светильник (Бра) Elektrostandard', description: 'an elektrostandard wall lamp sconce', imagePath: '/search_images/luminaire/8.jpg', category: 'luminaire' },
+  { id: 'lum_9', name: 'Подвесная светодиодная труба D60', description: 'a d60 suspended led tube light', imagePath: '/search_images/luminaire/9.jpg', category: 'luminaire' },
+  { id: 'lum_10', name: 'Люминесцентный светильник с ЭПРА', description: 'a fluorescent light fixture with an electronic ballast', imagePath: '/search_images/luminaire/10.jpg', category: 'luminaire' },
+
+  // === CHANDELIER (люстры) ===
+  { id: 'ch_1', name: 'Дизайнерская люстра MODO by Romatti', description: 'a modo designer chandelier by romatti', imagePath: '/search_images/chandelier/1.jpg', category: 'chandelier' },
+  { id: 'ch_2', name: 'Подвесная люстра Eclair 10206/600', description: 'a eclair 10206/600 pendant chandelier', imagePath: '/search_images/chandelier/2.jpg', category: 'chandelier' },
+  { id: 'ch_3', name: 'Стеклянная роскошная современная потолочная люстра', description: 'a luxurious modern glass chandelier in a minimalist style', imagePath: '/search_images/chandelier/3.jpg', category: 'chandelier' },
+  { id: 'ch_4', name: 'Хрустальная люстра со стеклянными рожками', description: 'a crystal chandelier with crystal arms and glass shades', imagePath: '/search_images/chandelier/4.jpg', category: 'chandelier' },
+  { id: 'ch_5', name: 'Люстра лофт 42 для спальни', description: 'loft ceiling chandelier for bedroom and hall model 42', imagePath: '/search_images/chandelier/5.jpg', category: 'chandelier' },
+  { id: 'ch_6', name: 'Подвесная люстра Semura 4986/12 Odeon Light', description: 'a semura 4986/12 pendant chandelier by odeon light', imagePath: '/search_images/chandelier/6.jpg', category: 'chandelier' },
+  { id: 'ch_7', name: 'Люстра потолочная Bulbs 27', description: 'ceiling chandelier bulbs model 27', imagePath: '/search_images/chandelier/7.jpg', category: 'chandelier' },
+  { id: 'ch_8', name: 'Люстра Кольцо Классика 6 ламп с подвесом', description: 'classic ring chandelier with 6 lamps and a pendant', imagePath: '/search_images/chandelier/8.jpg', category: 'chandelier' },
+  { id: 'ch_9', name: 'Люстра под лампу General Lighting Systems', description: 'chandelier for general lighting systems lamps', imagePath: '/search_images/chandelier/9.jpg', category: 'chandelier' },
+  { id: 'ch_10', name: 'Современная люстра в скандинавском стиле', description: 'modern chandelier in scandinavian style', imagePath: '/search_images/chandelier/10.jpg', category: 'chandelier' },
+];
+
+// Map YOLOv8 label → CLIP category
+export const LABEL_TO_CATEGORY = {
+  'table_lamp': 'lamp',
+  'luminaire':  'luminaire',
+  'chandelier': 'chandelier',
+};
+
+
+============================================================
+Файл: src/utils/cropSegment.js
+============================================================
+
+/**
+ * cropSegment.js
+ * Вырезает прямоугольную область из HTMLImageElement по bounding box
+ * и возвращает dataURL (PNG) для передачи в CLIP.
+ *
+ * @param {HTMLImageElement} imgEl  — исходное изображение (тег <img>)
+ * @param {number[]} bounding       — [x, y, w, h] в координатах модели (640×640)
+ * @param {number[]} modelInputShape — [batch, ch, W, H], обычно [1,3,640,640]
+ * @returns {string} dataURL
+ */
+export function cropSegment(imgEl, bounding, modelInputShape) {
+  const [modelW, modelH] = modelInputShape.slice(2);
+
+  // Реальные размеры отображаемого изображения
+  const dispW = imgEl.naturalWidth  || imgEl.width;
+  const dispH = imgEl.naturalHeight || imgEl.height;
+
+  // Масштаб: из координат модели → пиксели изображения
+  const scaleX = dispW / modelW;
+  const scaleY = dispH / modelH;
+
+  let [bx, by, bw, bh] = bounding;
+
+  // Переводим в реальные пиксели
+  const rx = Math.max(0, Math.round(bx * scaleX));
+  const ry = Math.max(0, Math.round(by * scaleY));
+  const rw = Math.min(Math.round(bw * scaleX), dispW - rx);
+  const rh = Math.min(Math.round(bh * scaleY), dispH - ry);
+
+  // Создаём временный canvas и рисуем вырезанный фрагмент
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width  = Math.max(rw, 1);
+  tmpCanvas.height = Math.max(rh, 1);
+  const ctx = tmpCanvas.getContext('2d');
+
+  ctx.drawImage(imgEl, rx, ry, rw, rh, 0, 0, tmpCanvas.width, tmpCanvas.height);
+
+  return tmpCanvas.toDataURL('image/png');
+}
+
+/**
+ * Для каждой уникальной метки из массива boxes
+ * берём первый (наиболее уверенный) bounding box и кропаем изображение.
+ *
+ * @param {HTMLImageElement} imgEl
+ * @param {Array}  boxes           — [{ label, probability, bounding }]
+ * @param {number[]} modelInputShape
+ * @returns {{ [label]: string }}  — словарь label → dataURL
+ */
+export function cropSegmentsByLabel(imgEl, boxes, modelInputShape) {
+  const seen = {};
+
+  // boxes уже отсортированы по убыванию probability в detect.js
+  for (const box of boxes) {
+    if (!seen[box.label]) {
+      seen[box.label] = cropSegment(imgEl, box.bounding, modelInputShape);
+    }
+  }
+
+  return seen;
+}
+
+
+============================================================
+Файл: src/workers/clip.worker.js
+============================================================
+
+/* eslint-disable no-restricted-globals */
+import {
+  env,
+  AutoTokenizer,
+  AutoProcessor,
+  SiglipTextModel,
+  SiglipVisionModel,
+  RawImage,
+} from '@huggingface/transformers';
+
+env.allowLocalModels = false;
+env.allowRemoteModels = true;
+
+const MODEL_ID = 'Xenova/siglip-base-patch16-224';
+
+class SiglipService {
+  static tokenizer = null;
+  static processor = null;
+  static textModel = null;
+  static visionModel = null;
+
+  static async init(progress_callback) {
+    if (!this.tokenizer) {
+      // fp32 — не требует SharedArrayBuffer, работает без COEP
+      const options = { device: 'wasm', dtype: 'fp32' };
+
+      this.tokenizer  = await AutoTokenizer.from_pretrained(MODEL_ID, { progress_callback });
+      this.processor  = await AutoProcessor.from_pretrained(MODEL_ID, { progress_callback });
+      this.textModel  = await SiglipTextModel.from_pretrained(MODEL_ID, { ...options, progress_callback });
+      this.visionModel = await SiglipVisionModel.from_pretrained(MODEL_ID, { ...options, progress_callback });
+    }
+  }
+}
+
+self.addEventListener('message', async (event) => {
+  const { type, data } = event.data;
+
+  try {
+    if (type === 'init') {
+      await SiglipService.init((msg) => {
+        self.postMessage({ type: 'progress', data: msg });
+      });
+
+      const items = data;
+      const embeddings = {};
+      const descriptions = items.map((item) => item.description);
+
+      const text_inputs = await SiglipService.tokenizer(descriptions, {
+        padding: 'max_length',
+        truncation: true,
+      });
+
+      const { pooler_output: textOutput } = await SiglipService.textModel(text_inputs);
+      const embeddingSize = 768;
+
+      for (let i = 0; i < items.length; i++) {
+        const start = i * embeddingSize;
+        const end   = start + embeddingSize;
+        embeddings[items[i].id] = Array.from(textOutput.data.slice(start, end));
+      }
+
+      self.postMessage({ type: 'text_embeddings_ready', data: embeddings });
+    }
+
+    if (type === 'image') {
+      const image = await RawImage.read(data);
+      const imageInputs = await SiglipService.processor(image);
+      const { pooler_output } = await SiglipService.visionModel(imageInputs);
+      self.postMessage({
+        type: 'image_embedding_ready',
+        data: Array.from(pooler_output.data),
+      });
+    }
+  } catch (error) {
+    console.error(error);
+    self.postMessage({ type: 'error', data: String(error) });
+  }
+});
+
+
+============================================================
+Файл: src/hooks/useClipSearch.js
+============================================================
+
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { SEARCH_ITEMS } from '../utils/searchItems';
+
+function cosineSimilarity(vecA, vecB) {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dotProduct += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Все категории с карточками в исходном порядке (score = null — ещё не ранжировано)
+const buildDefaultItems = () => ({
+  lamp:       SEARCH_ITEMS.filter(i => i.category === 'lamp').map(i => ({ ...i, score: null })),
+  luminaire:  SEARCH_ITEMS.filter(i => i.category === 'luminaire').map(i => ({ ...i, score: null })),
+  chandelier: SEARCH_ITEMS.filter(i => i.category === 'chandelier').map(i => ({ ...i, score: null })),
+});
+
+export const useClipSearch = () => {
+  const [clipReady, setClipReady] = useState(false);
+  const [clipLoading, setClipLoading] = useState(true);
+  const [clipProgress, setClipProgress] = useState(0);
+  const [clipError, setClipError] = useState(null);
+  // Всегда содержит все карточки; после поиска — отсортированные по score
+  const [clipItems, setClipItems] = useState(buildDefaultItems);
+
+  const workerRef = useRef(null);
+  const textEmbeddingsRef = useRef({});
+  const pendingImageRef = useRef(null);
+
+  useEffect(() => {
+    const worker = new Worker(
+      new URL('../workers/clip.worker.js', import.meta.url),
+      { type: 'module' }
+    );
+
+    worker.onmessage = (e) => {
+      const { type, data } = e.data;
+      switch (type) {
+        case 'progress':
+          if (data.status === 'progress') setClipProgress(Math.round(data.progress ?? 0));
+          break;
+        case 'text_embeddings_ready':
+          textEmbeddingsRef.current = data;
+          setClipReady(true);
+          setClipLoading(false);
+          break;
+        case 'image_embedding_ready':
+          if (pendingImageRef.current) {
+            pendingImageRef.current(data);
+            pendingImageRef.current = null;
+          }
+          break;
+        case 'error':
+          setClipError(data);
+          setClipLoading(false);
+          pendingImageRef.current = null;
+          break;
+        default:
+          break;
+      }
+    };
+
+    worker.onerror = (e) => {
+      setClipError(e.message);
+      setClipLoading(false);
+    };
+
+    workerRef.current = worker;
+    setClipLoading(true);
+    worker.postMessage({ type: 'init', data: SEARCH_ITEMS });
+
+    return () => worker.terminate();
+  }, []);
+
+  const searchOneSegment = useCallback(async (dataUrl, category) => {
+    const imageEmbedding = await new Promise((resolve, reject) => {
+      pendingImageRef.current = resolve;
+      workerRef.current.postMessage({ type: 'image', data: dataUrl });
+      setTimeout(() => {
+        if (pendingImageRef.current) { pendingImageRef.current = null; reject(new Error('timeout')); }
+      }, 30000);
+    });
+
+    const items = SEARCH_ITEMS.filter(i => i.category === category);
+    const scored = items.map(item => {
+      const vec = textEmbeddingsRef.current[item.id];
+      return { ...item, score: vec ? cosineSimilarity(imageEmbedding, vec) : 0 };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored;
+  }, []);
+
+  // segments = [{ categoryKey, dataUrl }]
+  const searchSegments = useCallback(async (segments) => {
+    if (!clipReady) return;
+    setClipLoading(true);
+    setClipError(null);
+
+    try {
+      const updates = {};
+      for (const seg of segments) {
+        updates[seg.categoryKey] = await searchOneSegment(seg.dataUrl, seg.categoryKey);
+      }
+      // Категории без детекции — оставляем в исходном порядке с score: null
+      setClipItems(prev => ({ ...prev, ...updates }));
+    } catch (err) {
+      setClipError(String(err));
+    } finally {
+      setClipLoading(false);
+    }
+  }, [clipReady, searchOneSegment]);
+
+  const resetClipResults = useCallback(() => {
+    setClipItems(buildDefaultItems());
+    setClipError(null);
+  }, []);
+
+  return { clipReady, clipLoading, clipProgress, clipError, clipItems, searchSegments, resetClipResults };
+};
+
+
+============================================================
+Файл: src/components/ClipResultsSection.jsx
+============================================================
+
+import React from 'react';
+import './ClipResultsSection.css';
+
+const CATEGORY_LABEL = {
+  lamp:       'Настольная лампа',
+  luminaire:  'Светильник',
+  chandelier: 'Люстра',
+};
+
+const CATEGORY_COLOR = {
+  lamp:       '#583EE0',
+  luminaire:  '#C5A23F',
+  chandelier: '#34D1B7',
+};
+
+const ClipCard = ({ item, rank, ranked }) => {
+  const scored = item.score !== null;
+  const pct = scored ? (item.score * 100).toFixed(1) : null;
+
+  return (
+    <div className={`clip-card ${ranked && scored ? 'clip-card--ranked' : ''}`} title={item.description}>
+      {ranked && scored && <div className="clip-card-rank">#{rank}</div>}
+      <div className="clip-card-img-wrap">
+        <img
+          src={item.imagePath}
+          alt={item.name}
+          loading="lazy"
+        />
+      </div>
+      <div className="clip-card-body">
+        <div className="clip-card-name">{item.name}</div>
+        {scored && (
+          <div className="clip-card-score">
+            <div className="clip-score-bar-bg">
+              <div className="clip-score-bar-fill" style={{ width: `${Math.min(Number(pct), 100)}%` }} />
+            </div>
+            <span className="clip-score-label">{pct}%</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ClipCategoryGroup = ({ categoryKey, items, ranked }) => {
+  const color = CATEGORY_COLOR[categoryKey] || '#888';
+  const label = CATEGORY_LABEL[categoryKey] || categoryKey;
+
+  return (
+    <div className="clip-category-group">
+      <div className="clip-category-header" style={{ borderLeft: `4px solid ${color}` }}>
+        <span className="clip-category-dot" style={{ background: color }} />
+        <span className="clip-category-title">{label}</span>
+        <span className="clip-category-sub">
+          {ranked ? '— отсортировано по сходству' : '— все варианты'}
+        </span>
+      </div>
+      <div className="clip-cards-row">
+        {items.map((item, i) => (
+          <ClipCard key={item.id} item={item} rank={i + 1} ranked={ranked} />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ClipResultsSection = ({ clipReady, clipLoading, clipProgress, clipError, clipItems }) => {
+  return (
+    <div className="clip-section">
+      <div className="section-label clip-section-label">
+        CLIP · Похожие карточки
+      </div>
+
+      {/* Статус загрузки модели */}
+      {clipLoading && (
+        <div className="clip-status">
+          <div className="clip-spinner" />
+          <span>
+            {!clipReady
+              ? `Загрузка SigLIP-модели… ${clipProgress > 0 ? clipProgress + '%' : ''}`
+              : 'Анализ сегментов…'}
+          </span>
+        </div>
+      )}
+
+      {clipError && (
+        <div className="clip-error">⚠ Ошибка CLIP: {clipError}</div>
+      )}
+
+      {/* Карточки — всегда видны */}
+      <div className="clip-results">
+        {Object.entries(clipItems).map(([key, items]) => {
+          // Категория считается ранжированной если у первой карточки есть score
+          const ranked = items.length > 0 && items[0].score !== null;
+          return (
+            <ClipCategoryGroup key={key} categoryKey={key} items={items} ranked={ranked} />
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+export default ClipResultsSection;
+
+
+============================================================
+Файл: src/components/ClipResultsSection.css
+============================================================
+
+/* ClipResultsSection.css */
+
+/* ── CLIP SECTION WRAPPER ───────────────────── */
+.clip-section {
+  width: 100%;
+  max-width: 720px;
+  margin-top: 16px;
+}
+
+.clip-section-label {
+  font-family: 'Playfair Display', serif;
+  font-size: 0.95rem;
+  color: var(--dark);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.clip-section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, #583EE0, transparent);
+}
+
+/* ── STATUS / LOADER ────────────────────────── */
+.clip-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  font-size: 0.83rem;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+
+.clip-spinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(88, 62, 224, 0.2);
+  border-top-color: #583EE0;
+  border-radius: 50%;
+  animation: clip-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes clip-spin { to { transform: rotate(360deg); } }
+
+/* ── ERROR ──────────────────────────────────── */
+.clip-error {
+  font-size: 0.82rem;
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.07);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+/* ── RESULTS ────────────────────────────────── */
+.clip-results {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* ── CATEGORY GROUP ─────────────────────────── */
+.clip-category-group {
+  animation: clip-fadeUp 0.3s ease both;
+}
+
+@keyframes clip-fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.clip-category-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  background: rgba(255,255,255,0.6);
+  border-radius: 6px;
+  backdrop-filter: blur(4px);
+}
+
+.clip-category-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.clip-category-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--dark);
+}
+
+.clip-category-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ── CARDS ROW ──────────────────────────────── */
+.clip-cards-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+/* ── SINGLE CLIP CARD ───────────────────────── */
+.clip-card {
+  position: relative;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(43,43,43,0.09);
+  overflow: hidden;
+  border: 1px solid rgba(197,160,89,0.12);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.clip-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(43,43,43,0.14);
+}
+
+.clip-card-rank {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  background: rgba(43,43,43,0.72);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 20px;
+  letter-spacing: 0.04em;
+  z-index: 2;
+}
+
+.clip-card-img-wrap {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  background: var(--cream-dark);
+}
+
+.clip-card-img-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.22s ease;
+}
+
+.clip-card:hover .clip-card-img-wrap img {
+  transform: scale(1.05);
+}
+
+.clip-card-body {
+  padding: 7px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+}
+
+.clip-card-name {
+  font-size: 0.71rem;
+  font-weight: 600;
+  color: var(--dark);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── SCORE BAR ──────────────────────────────── */
+.clip-card-score {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: auto;
+}
+
+.clip-score-bar-bg {
+  flex: 1;
+  height: 4px;
+  background: rgba(197,160,89,0.18);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.clip-score-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #583EE0, #34D1B7);
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.clip-score-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 30px;
+  text-align: right;
+}
+
+
+============================================================
+Файл: package.json
+============================================================
+
+{
+  "name": "yolov8seg",
+  "homepage": "https://sh-dimitrij.github.io/dl-yolov8-seg-lamp",
+  "version": "0.1.0",
+  "dependencies": {
+    "@techstark/opencv-js": "4.5.5-release.2",
+    "@huggingface/transformers": "^3.0.0",
+    "onnxruntime-web": "^1.14.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1"
+  },
+  "scripts": {
+    "start": "craco start",
+    "build": "craco build",
+    "predeploy": "yarn build",
+    "deploy": "gh-pages -d build"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@craco/craco": "^7.1.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "gh-pages": "^6.3.0"
+  }
+}
+
+
+============================================================
+Файл: craco.config.js
+============================================================
+
+const CopyPlugin = require("copy-webpack-plugin");
+const path = require("path");
+
+module.exports = {
+  webpack: {
+    plugins: {
+      add: [
+        new CopyPlugin({
+          patterns: [
+            { from: "node_modules/onnxruntime-web/dist/*.wasm", to: "static/js/[name][ext]" },
+            { from: './public/model/model.onnx', to: '[name][ext]'},
+            { from: './public/model/nms-yolov8.onnx', to: '[name][ext]'},
+            { from: './public/model/mask-yolov8-seg.onnx', to: '[name][ext]'}
+          ],
+        }),
+      ],
+    },
+    configure: (config) => {
+      config.resolve.fallback = {
+        fs: false,
+        path: false,
+        crypto: false,
+      };
+      return config;
+    },
+  },
+  devServer: {
+    historyApiFallback: {
+      disableDotRule: true,
+      rewrites: [
+        { from: /\.(onnx|wasm)$/, to: (context) => context.parsedUrl.pathname },
+      ],
+    },
+    setupMiddlewares: (middlewares, devServer) => {
+      const express = require("express");
+      devServer.app.use(
+        '/model',
+        express.static(path.resolve(__dirname, 'public/model'), {
+          setHeaders: (res) => {
+            res.setHeader('Content-Type', 'application/octet-stream');
+          }
+        })
+      );
+      return middlewares;
+    },
+  },
+};
+

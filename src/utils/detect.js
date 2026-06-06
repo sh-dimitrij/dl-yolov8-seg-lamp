@@ -122,6 +122,8 @@ export const detectImage = async (
   renderBoxes(ctx, boxes); // draw boxes after overlay added to canvas
 
   input.delete(); // delete unused Mat
+
+  return boxes; // единственное добавление к оригиналу
 };
 
 /**

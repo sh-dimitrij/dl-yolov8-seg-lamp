@@ -3,6 +3,43 @@
  * @param {HTMLCanvasElement} canvas canvas tag reference
  * @param {Array[Object]} boxes boxes array
  */
+
+// Russian display names (used only for info cards in App.js, NOT for canvas labels)
+export const CLASS_LABELS_RU = {
+  "table_lamp": "Настольная лампа",
+  "luminaire":  "Светильник",
+  "chandelier": "Люстра",
+};
+
+// Info shown in cards after detection
+export const CLASS_INFO = {
+  "table_lamp": {
+    description: "Компактный источник направленного света для рабочей поверхности или прикроватной тумбы.",
+    params: [
+      { name: "Тип",        value: "Настольный" },
+      { name: "Назначение", value: "Локальное освещение" },
+      { name: "Установка",  value: "На поверхность" },
+    ],
+  },
+  "luminaire": {
+    description: "Потолочный или настенный светильник для общего или акцентного освещения помещения.",
+    params: [
+      { name: "Тип",        value: "Потолочный / настенный" },
+      { name: "Назначение", value: "Общее освещение" },
+      { name: "Установка",  value: "Монтаж к потолку или стене" },
+    ],
+  },
+  "chandelier": {
+    description: "Декоративный многоламповый светильник, подвешиваемый к потолку, — акцент интерьера.",
+    params: [
+      { name: "Тип",        value: "Подвесной" },
+      { name: "Назначение", value: "Декор + освещение" },
+      { name: "Установка",  value: "Крепление к потолку" },
+    ],
+  },
+};
+
+// ── renderBoxes: ОРИГИНАЛ из merge.txt, не изменён ──────────────────────────
 export const renderBoxes = (ctx, boxes) => {
   // font configs
   const font = `${Math.max(
@@ -41,13 +78,13 @@ export const renderBoxes = (ctx, boxes) => {
   });
 };
 
+// ── Colors: оригинальная структура, только 3 первых цвета заменены ───────────
 export class Colors {
-  // ultralytics color palette https://ultralytics.com/
   constructor() {
     this.palette = [
-      "#FF3838",
-      "#FF9D97",
-      "#FF701F",
+      "#583EE0", // index 0 → table_lamp
+      "#C5A23F", // index 1 → luminaire
+      "#34D1B7", // index 2 → chandelier
       "#FFB21D",
       "#CFD231",
       "#48F90A",
