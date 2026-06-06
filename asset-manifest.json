@@ -1,7 +1,7 @@
 {
   "files": {
     "main.css": "/dl-yolov8-seg-lamp/static/css/main.ef7cc2f8.css",
-    "main.js": "/dl-yolov8-seg-lamp/static/js/main.695ce88e.js",
+    "main.js": "/dl-yolov8-seg-lamp/static/js/main.a806003b.js",
     "static/js/570.5dcb941c.chunk.js": "/dl-yolov8-seg-lamp/static/js/570.5dcb941c.chunk.js",
     "static/js/239.a5fe5caf.chunk.js": "/dl-yolov8-seg-lamp/static/js/239.a5fe5caf.chunk.js",
     "static/media/ort-wasm-simd-threaded.jsep.wasm": "/dl-yolov8-seg-lamp/static/media/ort-wasm-simd-threaded.jsep.666d0398a1e13e9c0c1d.wasm",
@@ -48,12 +48,12 @@
     "model/nms-yolov8.onnx": "/dl-yolov8-seg-lamp/model/nms-yolov8.onnx",
     "index.html": "/dl-yolov8-seg-lamp/index.html",
     "main.ef7cc2f8.css.map": "/dl-yolov8-seg-lamp/static/css/main.ef7cc2f8.css.map",
-    "main.695ce88e.js.map": "/dl-yolov8-seg-lamp/static/js/main.695ce88e.js.map",
+    "main.a806003b.js.map": "/dl-yolov8-seg-lamp/static/js/main.a806003b.js.map",
     "570.5dcb941c.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/570.5dcb941c.chunk.js.map",
     "239.a5fe5caf.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/239.a5fe5caf.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.ef7cc2f8.css",
-    "static/js/main.695ce88e.js"
+    "static/js/main.a806003b.js"
   ]
 }
