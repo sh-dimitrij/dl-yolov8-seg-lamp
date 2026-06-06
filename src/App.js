@@ -45,11 +45,11 @@ const App = () => {
 
   cv["onRuntimeInitialized"] = async () => {
     setLoading({ text: "Loading model...", progress: null });
-    const yolov8 = await InferenceSession.create('/model/model.onnx');
+    const yolov8 = await InferenceSession.create(`${process.env.PUBLIC_URL}/model/model.onnx`);
     setLoading({ text: "Warming up nms...", progress: null });
-    const nms = await InferenceSession.create('/model/nms-yolov8.onnx');
+    const nms = await InferenceSession.create(`${process.env.PUBLIC_URL}/model/nms-yolov8.onnx`);
     setLoading({ text: "Warming up mask...", progress: null });
-    const mask = await InferenceSession.create('/model/mask-yolov8-seg.onnx');
+    const mask = await InferenceSession.create(`${process.env.PUBLIC_URL}/model/mask-yolov8-seg.onnx`);
     setLoading({ text: "Warming up model...", progress: null });
     const tensor = new Tensor(
       "float32",

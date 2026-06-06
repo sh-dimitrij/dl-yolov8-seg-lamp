@@ -1,16 +1,21 @@
 const CopyPlugin = require("copy-webpack-plugin");
 const path = require("path");
+const webpack = require('webpack');
 
 module.exports = {
   webpack: {
     plugins: {
       add: [
+        new webpack.DefinePlugin({
+          'process.env.PUBLIC_URL': JSON.stringify('/dl-yolov8-seg-lamp')
+        }),
         new CopyPlugin({
           patterns: [
             { from: "node_modules/onnxruntime-web/dist/*.wasm", to: "static/js/[name][ext]" },
-            { from: './public/model/model.onnx',           to: '[name][ext]' },
-            { from: './public/model/nms-yolov8.onnx',      to: '[name][ext]' },
-            { from: './public/model/mask-yolov8-seg.onnx', to: '[name][ext]' },
+            { from: './public/model/model.onnx',           to: 'model/[name][ext]' },
+            { from: './public/model/nms-yolov8.onnx',      to: 'model/[name][ext]' },
+            { from: './public/model/mask-yolov8-seg.onnx', to: 'model/[name][ext]' },
+            { from: './public/search_images', to: 'search_images' },
           ],
         }),
       ],

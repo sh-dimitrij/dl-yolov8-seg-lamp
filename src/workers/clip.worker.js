@@ -8,8 +8,13 @@ import {
   RawImage,
 } from '@huggingface/transformers';
 
-env.allowLocalModels  = false;
+env.allowLocalModels = false;
 env.allowRemoteModels = true;
+env.backends = {
+  ...env.backends,
+  // Отключаем WebGPU для стабильности
+  webgpu: false,
+};
 
 const MODEL_ID = 'Xenova/siglip-base-patch16-224';
 
