@@ -1,9 +1,9 @@
 {
   "files": {
     "main.css": "/dl-yolov8-seg-lamp/static/css/main.7ba118e5.css",
-    "main.js": "/dl-yolov8-seg-lamp/static/js/main.e66bd504.js",
-    "static/js/570.301640bc.chunk.js": "/dl-yolov8-seg-lamp/static/js/570.301640bc.chunk.js",
-    "static/js/106.3b645e4e.chunk.js": "/dl-yolov8-seg-lamp/static/js/106.3b645e4e.chunk.js",
+    "main.js": "/dl-yolov8-seg-lamp/static/js/main.c1e42999.js",
+    "static/js/570.50ed7446.chunk.js": "/dl-yolov8-seg-lamp/static/js/570.50ed7446.chunk.js",
+    "static/js/145.d89d8228.chunk.js": "/dl-yolov8-seg-lamp/static/js/145.d89d8228.chunk.js",
     "static/media/ort-wasm-simd-threaded.jsep.wasm": "/dl-yolov8-seg-lamp/static/media/ort-wasm-simd-threaded.jsep.666d0398a1e13e9c0c1d.wasm",
     "model/model.onnx": "/dl-yolov8-seg-lamp/model/model.onnx",
     "static/js/ort-wasm-simd.wasm": "/dl-yolov8-seg-lamp/static/js/ort-wasm-simd.wasm",
@@ -48,12 +48,12 @@
     "model/nms-yolov8.onnx": "/dl-yolov8-seg-lamp/model/nms-yolov8.onnx",
     "index.html": "/dl-yolov8-seg-lamp/index.html",
     "main.7ba118e5.css.map": "/dl-yolov8-seg-lamp/static/css/main.7ba118e5.css.map",
-    "main.e66bd504.js.map": "/dl-yolov8-seg-lamp/static/js/main.e66bd504.js.map",
-    "570.301640bc.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/570.301640bc.chunk.js.map",
-    "106.3b645e4e.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/106.3b645e4e.chunk.js.map"
+    "main.c1e42999.js.map": "/dl-yolov8-seg-lamp/static/js/main.c1e42999.js.map",
+    "570.50ed7446.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/570.50ed7446.chunk.js.map",
+    "145.d89d8228.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/145.d89d8228.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.7ba118e5.css",
-    "static/js/main.e66bd504.js"
+    "static/js/main.c1e42999.js"
   ]
 }
