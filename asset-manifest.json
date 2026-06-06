@@ -1,0 +1,26 @@
+{
+  "files": {
+    "main.css": "/dl-yolov8-seg-lamp/static/css/main.ef7cc2f8.css",
+    "main.js": "/dl-yolov8-seg-lamp/static/js/main.a13a3559.js",
+    "static/js/570.5dcb941c.chunk.js": "/dl-yolov8-seg-lamp/static/js/570.5dcb941c.chunk.js",
+    "static/js/239.a5fe5caf.chunk.js": "/dl-yolov8-seg-lamp/static/js/239.a5fe5caf.chunk.js",
+    "static/media/ort-wasm-simd-threaded.jsep.wasm": "/dl-yolov8-seg-lamp/static/media/ort-wasm-simd-threaded.jsep.666d0398a1e13e9c0c1d.wasm",
+    "model.onnx": "/dl-yolov8-seg-lamp/model.onnx",
+    "static/js/ort-wasm-simd.wasm": "/dl-yolov8-seg-lamp/static/js/ort-wasm-simd.wasm",
+    "static/js/ort-wasm-simd-threaded.wasm": "/dl-yolov8-seg-lamp/static/js/ort-wasm-simd-threaded.wasm",
+    "static/js/ort-wasm.wasm": "/dl-yolov8-seg-lamp/static/js/ort-wasm.wasm",
+    "static/js/ort-wasm-threaded.wasm": "/dl-yolov8-seg-lamp/static/js/ort-wasm-threaded.wasm",
+    "static/media/ort.bundle.min.mjs": "/dl-yolov8-seg-lamp/static/media/ort.bundle.min.67f0451c17b997fb26c9.mjs",
+    "mask-yolov8-seg.onnx": "/dl-yolov8-seg-lamp/mask-yolov8-seg.onnx",
+    "nms-yolov8.onnx": "/dl-yolov8-seg-lamp/nms-yolov8.onnx",
+    "index.html": "/dl-yolov8-seg-lamp/index.html",
+    "main.ef7cc2f8.css.map": "/dl-yolov8-seg-lamp/static/css/main.ef7cc2f8.css.map",
+    "main.a13a3559.js.map": "/dl-yolov8-seg-lamp/static/js/main.a13a3559.js.map",
+    "570.5dcb941c.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/570.5dcb941c.chunk.js.map",
+    "239.a5fe5caf.chunk.js.map": "/dl-yolov8-seg-lamp/static/js/239.a5fe5caf.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.ef7cc2f8.css",
+    "static/js/main.a13a3559.js"
+  ]
+}
